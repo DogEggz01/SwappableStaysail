@@ -1,4 +1,5 @@
 # SwappableStaysail
+*Disclaimer: This mod is made with ChatGPT 5.6 Sol*
 - All staysail on stays can now be taken off by pressing **R** after fully furled. It will generate a sail package that you can move around.
   - Sail package will be named after stayname + sailname + size
   - Sail package will inhert the sail weight
