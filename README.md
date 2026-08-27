@@ -1,9 +1,10 @@
 # SwappableStaysail
-- All staysail on stays can now be taken off by pressing R. It will generate a sail package that you can move around.
+- All staysail on stays can now be taken off by pressing **R** after fully furled. It will generate a sail package that you can move around.
   - Sail package will be named after stayname + sailname + size
   - Sail package will inhert the sail weight
-- To install staysail, hold the package, aim at any part of the stay and press R again.
+- To install staysail, hold the package, aim at any part of the stay and press **R** again.
   - You can only install the staysail back to the original stay. You cannot install at other stay.
+  - The sail will go back to the position where you install it in the first place.
 - Add sail maker interactable scroll beside shipyard scroll
   - It will bring you to specialized shipyard, where you can only adjust staysail on stays
     - So you need to make your mast/stay loadout first in Shipyard before you come in here.
