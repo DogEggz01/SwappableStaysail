@@ -11,10 +11,11 @@ namespace SwappableStaysail
         BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class SwappableStaysailPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "DogEggz";
+        public const string PluginGuid = "DogEggz.SwappableStaysail";
         public const string PluginName = "Swappable Staysail";
         public const string PluginVersion = "1.1.4";
         public const string ShipyardExpansionGuid = "com.nandbrew.shipyardexpansion";
+        internal const string SaveDataKey = "DogEggz";
 
         private Harmony harmony;
 

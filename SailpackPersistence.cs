@@ -38,7 +38,7 @@ namespace SwappableStaysail
             Records.Clear();
             if (GameState.modData == null ||
                 !GameState.modData.TryGetValue(
-                    SwappableStaysailPlugin.PluginGuid,
+                    SwappableStaysailPlugin.SaveDataKey,
                     out string payload) ||
                 string.IsNullOrEmpty(payload))
             {
@@ -93,7 +93,7 @@ namespace SwappableStaysail
                     GameState.modData = new Dictionary<string, string>();
                 }
 
-                GameState.modData[SwappableStaysailPlugin.PluginGuid] =
+                GameState.modData[SwappableStaysailPlugin.SaveDataKey] =
                     payload;
                 SwappableStaysailPlugin.Log?.LogInfo(
                     $"Saved {snapshot.Count} sail package record(s).");
