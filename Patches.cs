@@ -74,6 +74,28 @@ namespace SwappableStaysail
         }
     }
 
+    [HarmonyPatch(typeof(SaveablePrefab), nameof(SaveablePrefab.Load))]
+    internal static class ActivateLoadedSailPackagePatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(SaveablePrefab __instance)
+        {
+            if (__instance == null || __instance.gameObject.activeSelf ||
+                __instance.GetComponent<SailpackData>() == null)
+            {
+                return;
+            }
+
+            // Sail package directory entries are inactive runtime templates.
+            // Vanilla save loading and BoatLocalItems clone those templates
+            // without activating the resulting item.
+            __instance.gameObject.SetActive(true);
+            SwappableStaysailPlugin.Log?.LogInfo(
+                $"Activated loaded sail package {__instance.instanceId} " +
+                $"from prefab {__instance.prefabIndex}.");
+        }
+    }
+
     [HarmonyPatch(typeof(SaveLoadManager), nameof(SaveLoadManager.SaveModData))]
     internal static class SaveModDataPatch
     {
@@ -275,7 +297,10 @@ namespace SwappableStaysail
             ShipItem shipItem = __state.GetComponent<ShipItem>();
             if (shipItem?.itemRigidbodyC != null)
             {
-                shipItem.itemRigidbodyC.gameObject.layer = 0;
+                // The solid physics proxy has no GoPointerButton. Vanilla keeps
+                // it on Ignore Raycast so it cannot hide the package's root
+                // interaction collider from the pointer.
+                shipItem.itemRigidbodyC.gameObject.layer = 2;
             }
         }
     }

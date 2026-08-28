@@ -3,14 +3,13 @@ using UnityEngine;
 
 namespace SwappableStaysail
 {
-    [Serializable]
     internal sealed class SailpackRecord
     {
         public int sailPrefabIndex;
         public int sailColor;
         public float scaleY = 1f;
         public float scaleZ = 1f;
-        public float packageMass = SailpackWeight.LegacyPackageMass;
+        public float packageMass = SailpackWeight.MinimumPackageMass;
         public float installHeight;
         public float minAngle;
         public float maxAngle;
@@ -48,8 +47,59 @@ namespace SwappableStaysail
             string sail = string.IsNullOrEmpty(sailName)
                 ? "Staysail"
                 : sailName;
-            int percentage = Mathf.RoundToInt(scaleY * 100f);
-            return $"{stay} {sail} ({percentage}%)";
+            if (HasScalePercentageSuffix(sail))
+            {
+                return $"{stay} {sail}";
+            }
+
+            int scaleYPercentage = Mathf.RoundToInt(scaleY * 100f);
+            int scaleZPercentage = Mathf.RoundToInt(scaleZ * 100f);
+            return $"{stay} {sail} " +
+                   $"({scaleYPercentage}%x{scaleZPercentage}%)";
+        }
+
+        private static bool HasScalePercentageSuffix(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value[value.Length - 1] != ')')
+            {
+                return false;
+            }
+
+            int opening = value.LastIndexOf(" (", StringComparison.Ordinal);
+            if (opening < 0)
+            {
+                return false;
+            }
+
+            string scale = value.Substring(
+                opening + 2,
+                value.Length - opening - 3);
+            int separator = scale.IndexOf('x');
+            if (separator < 0)
+            {
+                return IsWholePercentage(scale);
+            }
+            if (scale.IndexOf('x', separator + 1) >= 0)
+            {
+                return false;
+            }
+
+            return IsWholePercentage(scale.Substring(0, separator)) &&
+                   IsWholePercentage(scale.Substring(separator + 1));
+        }
+
+        private static bool IsWholePercentage(string value)
+        {
+            if (string.IsNullOrEmpty(value) ||
+                value[value.Length - 1] != '%')
+            {
+                return false;
+            }
+
+            return int.TryParse(
+                value.Substring(0, value.Length - 1),
+                out int percentage) &&
+                percentage >= 0;
         }
 
         internal SailpackRecord Copy()
@@ -62,22 +112,20 @@ namespace SwappableStaysail
             if (float.IsNaN(packageMass) || float.IsInfinity(packageMass) ||
                 packageMass <= 0f)
             {
-                // Version-1 records did not store weight. Preserve their original
-                // fixed package mass instead of guessing from mutable game settings.
-                packageMass = SailpackWeight.LegacyPackageMass;
+                packageMass = SailpackWeight.MinimumPackageMass;
             }
         }
     }
 
     internal static class SailpackWeight
     {
-        internal const float LegacyPackageMass = 0.1f;
+        internal const float MinimumPackageMass = 0.1f;
 
         internal static float FromSail(Sail sail)
         {
             if (sail == null)
             {
-                return LegacyPackageMass;
+                return MinimumPackageMass;
             }
 
             // Match NAND Tweaks' shipyard weight calculation. For staysails the
@@ -98,21 +146,7 @@ namespace SwappableStaysail
             {
                 categoryMass = baseMass * 0.5f;
             }
-            return Mathf.Max(LegacyPackageMass, baseMass + categoryMass);
+            return Mathf.Max(MinimumPackageMass, baseMass + categoryMass);
         }
-    }
-
-    [Serializable]
-    internal sealed class SailpackSaveEntry
-    {
-        public int instanceId;
-        public SailpackRecord record;
-    }
-
-    [Serializable]
-    internal sealed class SailpackSaveFile
-    {
-        public int formatVersion = 2;
-        public SailpackSaveEntry[] sailpacks = Array.Empty<SailpackSaveEntry>();
     }
 }

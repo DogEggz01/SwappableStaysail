@@ -6,49 +6,75 @@ namespace SwappableStaysail
 {
     internal static class SailpackFactory
     {
-        internal const int DonorPrefabIndex = 219;
-        internal const int PrefabIndex = 390;
+        internal const int StandardDonorPrefabIndex = 219;
+        internal const int SmallDonorPrefabIndex = 221;
+        internal const int LegacyPrefabIndex = 390;
+        internal const int StandardPrefabIndex = 600;
+        internal const int SmallPrefabIndex = 601;
+        internal const float SmallPackageMaximumMass = 25f;
 
-        private static GameObject prefab;
+        private static GameObject legacyPrefab;
+        private static GameObject standardPrefab;
+        private static GameObject smallPrefab;
         private static bool registrationLogged;
 
         internal static bool EnsureRegistered(PrefabsDirectory directory)
         {
-            if (directory == null || directory.directory == null ||
-                directory.directory.Length <= DonorPrefabIndex ||
-                directory.directory[DonorPrefabIndex] == null)
+            if (directory == null || directory.directory == null)
             {
                 SwappableStaysailPlugin.Log?.LogError(
-                    "Cannot register sail package: leather package donor 219 is unavailable.");
+                    "Cannot register sail packages: the prefab directory is unavailable.");
                 return false;
             }
 
-            if (directory.directory.Length <= PrefabIndex)
+            if (!HasDonor(directory, StandardDonorPrefabIndex, "standard") ||
+                !HasDonor(directory, SmallDonorPrefabIndex, "small"))
             {
-                Array.Resize(ref directory.directory, PrefabIndex + 1);
-            }
-
-            GameObject occupied = directory.directory[PrefabIndex];
-            if (occupied != null && occupied != prefab &&
-                occupied.GetComponent<SailpackData>() == null)
-            {
-                SwappableStaysailPlugin.Log?.LogError(
-                    $"Cannot register sail package: prefab index {PrefabIndex} is " +
-                    $"occupied by '{occupied.name}'.");
                 return false;
             }
 
-            if (prefab == null)
+            if (directory.directory.Length <= SmallPrefabIndex)
             {
-                prefab = BuildPrefab(directory.directory[DonorPrefabIndex]);
+                Array.Resize(ref directory.directory, SmallPrefabIndex + 1);
             }
-            directory.directory[PrefabIndex] = prefab;
+
+            if (!CanClaimSlot(directory, LegacyPrefabIndex, legacyPrefab) ||
+                !CanClaimSlot(directory, StandardPrefabIndex, standardPrefab) ||
+                !CanClaimSlot(directory, SmallPrefabIndex, smallPrefab))
+            {
+                return false;
+            }
+
+            if (legacyPrefab == null)
+            {
+                legacyPrefab = BuildPrefab(
+                    directory.directory[StandardDonorPrefabIndex],
+                    LegacyPrefabIndex);
+            }
+            if (standardPrefab == null)
+            {
+                standardPrefab = BuildPrefab(
+                    directory.directory[StandardDonorPrefabIndex],
+                    StandardPrefabIndex);
+            }
+            if (smallPrefab == null)
+            {
+                smallPrefab = BuildPrefab(
+                    directory.directory[SmallDonorPrefabIndex],
+                    SmallPrefabIndex);
+            }
+
+            directory.directory[LegacyPrefabIndex] = legacyPrefab;
+            directory.directory[StandardPrefabIndex] = standardPrefab;
+            directory.directory[SmallPrefabIndex] = smallPrefab;
             if (!registrationLogged)
             {
                 registrationLogged = true;
                 SwappableStaysailPlugin.Log?.LogInfo(
-                    $"Registered sail package prefab at directory index {PrefabIndex} " +
-                    $"from standard package donor {DonorPrefabIndex}.");
+                    "Registered sail package prefabs: " +
+                    $"legacy loader={LegacyPrefabIndex}, " +
+                    $"standard={StandardPrefabIndex} (donor {StandardDonorPrefabIndex}), " +
+                    $"small={SmallPrefabIndex} (donor {SmallDonorPrefabIndex}).");
             }
             return true;
         }
@@ -67,7 +93,12 @@ namespace SwappableStaysail
             {
                 Array.Resize(ref directory.shipItems, directory.directory.Length);
             }
-            directory.shipItems[PrefabIndex] = prefab.GetComponent<ShipItem>();
+            directory.shipItems[LegacyPrefabIndex] =
+                legacyPrefab.GetComponent<ShipItem>();
+            directory.shipItems[StandardPrefabIndex] =
+                standardPrefab.GetComponent<ShipItem>();
+            directory.shipItems[SmallPrefabIndex] =
+                smallPrefab.GetComponent<ShipItem>();
         }
 
         internal static SailpackData CreateStaged(
@@ -87,8 +118,11 @@ namespace SwappableStaysail
             SaveablePrefab saveable = null;
             try
             {
+                GameObject selectedPrefab = UsesSmallPackage(record.packageMass)
+                    ? smallPrefab
+                    : standardPrefab;
                 instance = UnityEngine.Object.Instantiate(
-                    prefab,
+                    selectedPrefab,
                     position,
                     rotation);
                 instance.SetActive(false);
@@ -169,42 +203,116 @@ namespace SwappableStaysail
             PrefabsDirectory directory = PrefabsDirectory.instance;
             if (directory != null)
             {
-                if (directory.directory != null &&
-                    directory.directory.Length > PrefabIndex &&
-                    directory.directory[PrefabIndex] == prefab)
-                {
-                    directory.directory[PrefabIndex] = null;
-                }
-                if (directory.shipItems != null &&
-                    directory.shipItems.Length > PrefabIndex &&
-                    prefab != null &&
-                    directory.shipItems[PrefabIndex] ==
-                    prefab.GetComponent<ShipItem>())
-                {
-                    directory.shipItems[PrefabIndex] = null;
-                }
+                UnregisterPrefab(directory, LegacyPrefabIndex, legacyPrefab);
+                UnregisterPrefab(directory, StandardPrefabIndex, standardPrefab);
+                UnregisterPrefab(directory, SmallPrefabIndex, smallPrefab);
             }
-            if (prefab != null)
-            {
-                UnityEngine.Object.Destroy(prefab);
-            }
-            prefab = null;
+            DestroyPrefab(legacyPrefab);
+            DestroyPrefab(standardPrefab);
+            DestroyPrefab(smallPrefab);
+            legacyPrefab = null;
+            standardPrefab = null;
+            smallPrefab = null;
             registrationLogged = false;
         }
 
-        private static GameObject BuildPrefab(GameObject donor)
+        private static bool HasDonor(
+            PrefabsDirectory directory,
+            int donorIndex,
+            string packageKind)
+        {
+            if (directory.directory.Length > donorIndex &&
+                directory.directory[donorIndex] != null)
+            {
+                return true;
+            }
+
+            SwappableStaysailPlugin.Log?.LogError(
+                $"Cannot register sail packages: {packageKind} package donor " +
+                $"{donorIndex} is unavailable.");
+            return false;
+        }
+
+        private static bool CanClaimSlot(
+            PrefabsDirectory directory,
+            int prefabIndex,
+            GameObject ownedPrefab)
+        {
+            GameObject occupied = directory.directory[prefabIndex];
+            if (occupied == null || occupied == ownedPrefab ||
+                occupied.GetComponent<SailpackData>() != null)
+            {
+                return true;
+            }
+
+            SwappableStaysailPlugin.Log?.LogError(
+                $"Cannot register sail package: prefab index {prefabIndex} is " +
+                $"occupied by '{occupied.name}'.");
+            return false;
+        }
+
+        private static bool UsesSmallPackage(float packageMass)
+        {
+            return !float.IsNaN(packageMass) &&
+                   !float.IsInfinity(packageMass) &&
+                   packageMass <= SmallPackageMaximumMass;
+        }
+
+        private static void UnregisterPrefab(
+            PrefabsDirectory directory,
+            int prefabIndex,
+            GameObject registeredPrefab)
+        {
+            if (registeredPrefab == null)
+            {
+                return;
+            }
+
+            if (directory.directory != null &&
+                directory.directory.Length > prefabIndex &&
+                directory.directory[prefabIndex] == registeredPrefab)
+            {
+                directory.directory[prefabIndex] = null;
+            }
+            if (directory.shipItems != null &&
+                directory.shipItems.Length > prefabIndex &&
+                directory.shipItems[prefabIndex] ==
+                registeredPrefab.GetComponent<ShipItem>())
+            {
+                directory.shipItems[prefabIndex] = null;
+            }
+        }
+
+        private static void DestroyPrefab(GameObject registeredPrefab)
+        {
+            if (registeredPrefab != null)
+            {
+                UnityEngine.Object.Destroy(registeredPrefab);
+            }
+        }
+
+        private static GameObject BuildPrefab(GameObject donor, int prefabIndex)
         {
             GameObject clone = UnityEngine.Object.Instantiate(donor);
             clone.SetActive(false);
             clone.name = "sail package";
             clone.transform.localScale = Vector3.one;
 
+            if (prefabIndex == SmallPrefabIndex)
+            {
+                Transform label = clone.transform.Find("label");
+                if (label != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(label.gameObject);
+                }
+            }
+
             SaveablePrefab saveable = clone.GetComponent<SaveablePrefab>();
             ShipItem item = clone.GetComponent<ShipItem>();
-            saveable.prefabIndex = PrefabIndex;
+            saveable.prefabIndex = prefabIndex;
             item.name = "sail package";
             item.lookText = "sail package";
-            item.mass = SailpackWeight.LegacyPackageMass;
+            item.mass = SailpackWeight.MinimumPackageMass;
             // Preserve vanilla package/cargo behavior. Automatic uninstall
             // handoff stabilizes only the first moments of big-item pickup.
             item.big = true;
@@ -311,6 +419,8 @@ namespace SwappableStaysail
                 return;
             }
 
+            MigrateLegacyPrefabIndex();
+
             string displayName = record.GetDisplayName();
             gameObject.name = displayName;
             ShipItem item = GetComponent<ShipItem>();
@@ -327,6 +437,22 @@ namespace SwappableStaysail
                         item.mass * 0.1f;
                 }
             }
+        }
+
+        private void MigrateLegacyPrefabIndex()
+        {
+            SaveablePrefab saveable = GetComponent<SaveablePrefab>();
+            if (saveable == null ||
+                saveable.prefabIndex != SailpackFactory.LegacyPrefabIndex)
+            {
+                return;
+            }
+
+            saveable.prefabIndex = SailpackFactory.StandardPrefabIndex;
+            SwappableStaysailPlugin.Log?.LogInfo(
+                $"Migrated sail package {saveable.instanceId} from prefab index " +
+                $"{SailpackFactory.LegacyPrefabIndex} to " +
+                $"{SailpackFactory.StandardPrefabIndex}.");
         }
 
         internal GameObject GetSailPrefab()

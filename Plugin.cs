@@ -13,7 +13,7 @@ namespace SwappableStaysail
     {
         public const string PluginGuid = "DogEggz";
         public const string PluginName = "Swappable Staysail";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.1.4";
         public const string ShipyardExpansionGuid = "com.nandbrew.shipyardexpansion";
 
         private Harmony harmony;
@@ -29,7 +29,10 @@ namespace SwappableStaysail
             harmony.PatchAll();
             Logger.LogInfo(
                 $"{PluginName} {PluginVersion} loaded. " +
-                $"Sail package prefab index={SailpackFactory.PrefabIndex}.");
+                $"Sail package prefab indexes: legacy=" +
+                $"{SailpackFactory.LegacyPrefabIndex}, standard=" +
+                $"{SailpackFactory.StandardPrefabIndex}, small=" +
+                $"{SailpackFactory.SmallPrefabIndex}.");
         }
 
         private void OnDestroy()

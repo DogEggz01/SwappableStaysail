@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEngine;
 
@@ -38,27 +39,19 @@ namespace SwappableStaysail
             if (GameState.modData == null ||
                 !GameState.modData.TryGetValue(
                     SwappableStaysailPlugin.PluginGuid,
-                    out string json) ||
-                string.IsNullOrEmpty(json))
+                    out string payload) ||
+                string.IsNullOrEmpty(payload))
             {
                 return;
             }
 
             try
             {
-                SailpackSaveFile save = JsonUtility.FromJson<SailpackSaveFile>(json);
-                if (save?.sailpacks == null)
+                Dictionary<int, SailpackRecord> loaded =
+                    SailpackPersistenceCodec.Decode(payload);
+                foreach (KeyValuePair<int, SailpackRecord> pair in loaded)
                 {
-                    return;
-                }
-
-                foreach (SailpackSaveEntry entry in save.sailpacks)
-                {
-                    if (entry != null && entry.instanceId > 0 && entry.record != null)
-                    {
-                        entry.record.Normalize();
-                        Records[entry.instanceId] = entry.record.Copy();
-                    }
+                    Records[pair.Key] = pair.Value.Copy();
                 }
 
                 SwappableStaysailPlugin.Log?.LogInfo(
@@ -81,23 +74,29 @@ namespace SwappableStaysail
             try
             {
                 ReconcileLiveSailpacks();
-                SailpackSaveFile save = new SailpackSaveFile
+                Dictionary<int, SailpackRecord> snapshot = Records.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value.Copy());
+                string payload = SailpackPersistenceCodec.Encode(snapshot);
+                Dictionary<int, SailpackRecord> verified =
+                    SailpackPersistenceCodec.Decode(payload);
+                if (verified.Count != snapshot.Count ||
+                    !verified.Keys.OrderBy(id => id)
+                        .SequenceEqual(snapshot.Keys.OrderBy(id => id)))
                 {
-                    sailpacks = Records
-                        .Select(pair => new SailpackSaveEntry
-                        {
-                            instanceId = pair.Key,
-                            record = pair.Value
-                        })
-                        .ToArray()
-                };
+                    throw new InvalidDataException(
+                        "Sail package metadata failed its save-time verification.");
+                }
+
                 if (GameState.modData == null)
                 {
                     GameState.modData = new Dictionary<string, string>();
                 }
 
                 GameState.modData[SwappableStaysailPlugin.PluginGuid] =
-                    JsonUtility.ToJson(save);
+                    payload;
+                SwappableStaysailPlugin.Log?.LogInfo(
+                    $"Saved {snapshot.Count} sail package record(s).");
             }
             catch (Exception exception)
             {
@@ -109,7 +108,7 @@ namespace SwappableStaysail
         private static void ReconcileLiveSailpacks()
         {
             SailpackData[] live =
-                UnityEngine.Object.FindObjectsOfType<SailpackData>();
+                Resources.FindObjectsOfTypeAll<SailpackData>();
             HashSet<int> liveIds = new HashSet<int>();
             foreach (SailpackData data in live)
             {
@@ -173,5 +172,6 @@ namespace SwappableStaysail
                 Records.Remove(id);
             }
         }
+
     }
 }
