@@ -12,7 +12,7 @@
 ## Sail Maker
 - A new interactable Sail Maker scroll has been added beside the Shipyard scroll.
   - It opens a specialized shipyard where you can configure staysails only.
-    - Your mast and stay layout must therefore be set up in the normal Shipyard first.
+  - Your mast and stay layout must therefore be set up in the normal Shipyard first.
 - Once you have selected the desired staysail type, size, and position, click Buy Staysail in the bottom-left corner.
   - A sail package will be generated beside the Sail Maker scroll.
   - You can buy multiple different staysails for the same stay, carry them aboard, and swap between them during a passage.
