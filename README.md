@@ -10,10 +10,11 @@
   - Each sail package is **bound to the stay it was created for** and cannot be installed on a different stay.
   - The package remembers the sail's position on that stay, so it will return to the same position regardless of where you aim on the stay when installing it.
 ## Sail Maker
-- A new interactable Sail Maker scroll has been added beside the Shipyard scroll.
+- You can enter sail maker mode in shipyard, the button is above clean ship. 
   - It opens a specialized shipyard where you can configure staysails only.
   - Your mast and stay layout must therefore be set up in the normal Shipyard first.
 - Once you have selected the desired staysail type, size, and position, click Buy Staysail in the bottom-left corner.
   - A sail package will be generated beside the Sail Maker scroll.
   - You can buy multiple different staysails for the same stay, carry them aboard, and swap between them during a passage.
+- Press the sail maker button again to switch back to shipyard
 - If you install your staysail high up the stay and you don't have crow's nest, you might need a little parkour on stay to take it out.
