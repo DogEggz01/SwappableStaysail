@@ -521,6 +521,12 @@ namespace SwappableStaysail
 
     internal sealed class SailpackData : MonoBehaviour
     {
+        // Every package given a record, including one still staged and
+        // inactive (no Awake, so no OnDestroy when it goes). The save reads
+        // this instead of searching every loaded object, about 3 ms a search.
+        private static readonly HashSet<SailpackData> Tracked =
+            new HashSet<SailpackData>();
+
         private SailpackRecord record;
         private Mast runtimeTarget;
         internal bool HasRecord => record != null;
@@ -541,6 +547,17 @@ namespace SwappableStaysail
         internal void BindTarget(Mast target)
         {
             runtimeTarget = target;
+        }
+
+        internal static IEnumerable<SailpackData> GetTracked()
+        {
+            Tracked.RemoveWhere(data => data == null);
+            return Tracked;
+        }
+
+        internal static void ClearTracked()
+        {
+            Tracked.Clear();
         }
 
         private IEnumerator Start()
@@ -588,6 +605,7 @@ namespace SwappableStaysail
                 return;
             }
 
+            Tracked.Add(this);
             MigrateLegacyPrefabIndex();
 
             string displayName = record.GetDisplayName();
@@ -698,6 +716,7 @@ namespace SwappableStaysail
         internal static void Dispose()
         {
             Records.Clear();
+            SailpackData.ClearTracked();
         }
 
         internal static void Save()
@@ -738,10 +757,8 @@ namespace SwappableStaysail
 
         private static void ReconcileLiveSailpacks()
         {
-            SailpackData[] live =
-                Resources.FindObjectsOfTypeAll<SailpackData>();
             HashSet<int> liveIds = new HashSet<int>();
-            foreach (SailpackData data in live)
+            foreach (SailpackData data in SailpackData.GetTracked())
             {
                 SaveablePrefab saveable = data.GetComponent<SaveablePrefab>();
                 if (saveable == null || saveable.instanceId <= 0 || !data.HasRecord)
@@ -773,10 +790,56 @@ namespace SwappableStaysail
                 }
             }
 
-            foreach (SaveableObject saveableObject in
-                     Resources.FindObjectsOfTypeAll<SaveableObject>())
+            // The ships' cargo caches can only prove more IDs alive, so read
+            // them only while a record is still unproven: first the game's own
+            // ship list, then every loaded ship. During the save Shipwright and
+            // Storage swaps in a list without its copies (its SaveFilterPatch),
+            // so only the search sees a far copy's cache.
+            if (AllProven(liveIds))
             {
-                if (saveableObject?.localItems == null)
+                return;
+            }
+            AddCachedIds(manager.GetCurrentObjects(), liveIds);
+            if (!AllProven(liveIds))
+            {
+                AddCachedIds(
+                    Resources.FindObjectsOfTypeAll<SaveableObject>(),
+                    liveIds);
+            }
+
+            List<int> stale = Records.Keys
+                .Where(id => !liveIds.Contains(id))
+                .ToList();
+            foreach (int id in stale)
+            {
+                Records.Remove(id);
+            }
+        }
+
+        private static bool AllProven(HashSet<int> liveIds)
+        {
+            foreach (int id in Records.Keys)
+            {
+                if (!liveIds.Contains(id))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static void AddCachedIds(
+            IEnumerable<SaveableObject> saveableObjects,
+            HashSet<int> liveIds)
+        {
+            if (saveableObjects == null)
+            {
+                return;
+            }
+
+            foreach (SaveableObject saveableObject in saveableObjects)
+            {
+                if (saveableObject == null || saveableObject.localItems == null)
                 {
                     continue;
                 }
@@ -793,14 +856,6 @@ namespace SwappableStaysail
                         liveIds.Add(cached.instanceId);
                     }
                 }
-            }
-
-            List<int> stale = Records.Keys
-                .Where(id => !liveIds.Contains(id))
-                .ToList();
-            foreach (int id in stale)
-            {
-                Records.Remove(id);
             }
         }
 

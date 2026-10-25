@@ -1,7 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using BepInEx.Logging;
 using HarmonyLib;
 using cakeslice;
 using UnityEngine;
@@ -62,243 +64,201 @@ namespace SwappableStaysail
     }
 
     [HarmonyPatch(typeof(ShipyardDocuments), "Update")]
-    internal static class SailmakerEntryPatch
+    internal static class SailmakerDeliveryPointPatch
     {
-        private static bool cloning;
-
         [HarmonyPostfix]
         private static void Postfix(ShipyardDocuments __instance)
         {
-            if (cloning || __instance == null || __instance.shipyard == null ||
-                __instance.GetComponent<SailmakerEntryInstalled>() != null)
+            if (__instance == null || __instance.shipyard == null || __instance.GetComponent<SailmakerDeliveryInstalled>() != null)
             {
                 return;
             }
-
-            cloning = true;
+            __instance.gameObject.AddComponent<SailmakerDeliveryInstalled>();
             try
             {
-                GameObject clone = UnityEngine.Object.Instantiate(
-                    __instance.gameObject,
-                    __instance.transform.parent);
-                clone.SetActive(false);
-                clone.name = "Sail Maker";
-                ShipyardDocuments copiedDocuments =
-                    clone.GetComponent<ShipyardDocuments>();
-                GameObject copiedKeeper = copiedDocuments != null
-                    ? copiedDocuments.keeper
-                    : null;
-
-                // A live ShipyardDocuments clone carries its existing Outline
-                // and interaction state. Strip all interaction components before
-                // the clone is activated, then give it one clean Sail Maker button.
-                foreach (GoPointerButton oldButton in
-                         clone.GetComponentsInChildren<GoPointerButton>(true))
+                Transform transform = __instance.transform;
+                GameObject gameObject = new GameObject("sail maker delivery anchor");
+                gameObject.transform.SetParent(transform.parent, false);
+                gameObject.transform.localScale = transform.localScale;
+                gameObject.transform.rotation = transform.rotation;
+                Vector3 position;
+                Vector3 euler;
+                if (SailmakerDeliveryPointPatch.TryGetAuthoredPose(__instance.gameObject.scene.name, out position, out euler))
                 {
-                    UnityEngine.Object.DestroyImmediate(oldButton);
-                }
-                foreach (Outline oldOutline in
-                         clone.GetComponentsInChildren<Outline>(true))
-                {
-                    UnityEngine.Object.DestroyImmediate(oldOutline);
-                }
-                foreach (SailmakerEntryInstalled copiedMarker in
-                         clone.GetComponentsInChildren<SailmakerEntryInstalled>(true))
-                {
-                    UnityEngine.Object.DestroyImmediate(copiedMarker);
-                }
-
-                Collider sourceCollider = __instance.GetComponent<Collider>();
-                Collider cloneCollider = clone.GetComponent<Collider>();
-                foreach (Collider copiedCollider in
-                         clone.GetComponentsInChildren<Collider>(true))
-                {
-                    if (copiedCollider != cloneCollider)
-                    {
-                        UnityEngine.Object.DestroyImmediate(copiedCollider);
-                    }
-                }
-
-                Vector3 lateral = Vector3.zero;
-                bool hasAuthoredPose = TryGetAuthoredPose(
-                    __instance.gameObject.scene.name,
-                    out Vector3 localPosition,
-                    out Vector3 localEulerAngles);
-                if (hasAuthoredPose)
-                {
-                    clone.transform.position =
-                        __instance.transform.TransformPoint(localPosition);
-                    clone.transform.rotation =
-                        __instance.transform.rotation *
-                        Quaternion.Euler(localEulerAngles);
+                    gameObject.transform.position = transform.TransformPoint(position);
+                    gameObject.transform.rotation = transform.rotation * Quaternion.Euler(euler);
                 }
                 else
                 {
-                    // Retain a safe fallback for modded or future shipyards that
-                    // do not have a hand-authored pose.
-                    lateral = GetSurfaceLateral(
-                        sourceCollider,
-                        __instance.transform);
-                    float separation =
-                        GetProjectedHalfExtent(sourceCollider, lateral) * 2f +
-                        0.45f;
-                    clone.transform.position = __instance.transform.position +
-                                               lateral * separation;
+                    gameObject.transform.position = transform.position + SailmakerDeliveryPointPatch.GetFallbackOffset(__instance.GetComponent<Collider>(), transform);
                 }
-
-                SailmakerOrderButton button =
-                    clone.AddComponent<SailmakerOrderButton>();
-                button.Initialize(__instance.shipyard);
-                SailmakerEntryStateMirror stateMirror =
-                    clone.AddComponent<SailmakerEntryStateMirror>();
-                stateMirror.Initialize(__instance.keeper, copiedKeeper);
-
-                GameObject deliveryObject =
-                    new GameObject("sail package delivery point");
-                deliveryObject.transform.SetParent(clone.transform, false);
-                deliveryObject.transform.localPosition = new Vector3(0f, 0.55f, 0.8f);
-                SailmakerSession.RegisterDeliveryPoint(
-                    __instance.shipyard,
-                    deliveryObject.transform);
-
-                __instance.gameObject.AddComponent<SailmakerEntryInstalled>();
-                clone.SetActive(true);
-                for (int attempt = 0;
-                     !hasAuthoredPose &&
-                     sourceCollider != null && cloneCollider != null &&
-                     sourceCollider.bounds.Intersects(cloneCollider.bounds) &&
-                     attempt < 8;
-                     attempt++)
+                GameObject gameObject2 = new GameObject("sail package delivery point");
+                gameObject2.transform.SetParent(gameObject.transform, false);
+                gameObject2.transform.localPosition = new Vector3(0f, 0.55f, 0.8f);
+                SailmakerSession.RegisterDeliveryPoint(__instance.shipyard, gameObject2.transform);
+            }
+            catch (Exception arg)
+            {
+                ManualLogSource log = SwappableStaysailPlugin.Log;
+                if (log != null)
                 {
-                    clone.transform.position += lateral * 0.25f;
+                    log.LogError(string.Format("Could not create the Sail Maker delivery point: {0}", arg));
                 }
             }
-            catch (Exception exception)
-            {
-                SwappableStaysailPlugin.Log?.LogError(
-                    $"Could not create sailmaker entry: {exception}");
-            }
-            finally
-            {
-                cloning = false;
-            }
         }
 
-        private static bool TryGetAuthoredPose(
-            string sceneName,
-            out Vector3 localPosition,
-            out Vector3 localEulerAngles)
+        private static Vector3 GetFallbackOffset(Collider collider, Transform source)
         {
-            switch (sceneName)
+            Vector3 surfaceLateral = SailmakerDeliveryPointPatch.GetSurfaceLateral(collider, source);
+            Vector3 vector = surfaceLateral * (SailmakerDeliveryPointPatch.GetProjectedHalfExtent(collider, surfaceLateral) * 2f + 0.45f);
+            if (collider == null)
             {
-                case "island 1 A Gold Rock":
-                    localPosition = new Vector3(-0.646f, -0.66f, 0f);
-                    localEulerAngles = new Vector3(-1.716f, 0f, -27.634f);
-                    return true;
-                case "island 9 E Dragon Cliffs":
-                    localPosition = new Vector3(-0.267f, -0.758f, 0f);
-                    localEulerAngles = new Vector3(0f, 0f, 20.456f);
-                    return true;
-                case "island 15 M (Fort)":
-                    localPosition = new Vector3(-0.993f, -1.933f, 0f);
-                    localEulerAngles = new Vector3(0f, 0f, -15.067f);
-                    return true;
-                case "island 27 Lagoon SwampShipyard":
-                    localPosition = new Vector3(-0.699f, -0.891f, 0f);
-                    localEulerAngles = new Vector3(0f, 0f, -157.151f);
-                    return true;
-                default:
-                    localPosition = Vector3.zero;
-                    localEulerAngles = Vector3.zero;
-                    return false;
+                return vector;
             }
+            Bounds bounds = collider.bounds;
+            Bounds bounds2 = bounds;
+            for (int i = 0; i < 8; i++)
+            {
+                bounds2.center = bounds.center + vector;
+                if (!bounds.Intersects(bounds2))
+                {
+                    break;
+                }
+                vector += surfaceLateral * 0.25f;
+            }
+            return vector;
         }
 
-        private static float GetProjectedHalfExtent(
-            Collider collider,
-            Vector3 direction)
+        private static bool TryGetAuthoredPose(string sceneName, out Vector3 localPosition, out Vector3 localEulerAngles)
+        {
+            if (sceneName == "island 1 A Gold Rock")
+            {
+                localPosition = new Vector3(-0.646f, -0.66f, 0f);
+                localEulerAngles = new Vector3(-1.716f, 0f, -27.634f);
+                return true;
+            }
+            if (sceneName == "island 9 E Dragon Cliffs")
+            {
+                localPosition = new Vector3(-0.267f, -0.758f, 0f);
+                localEulerAngles = new Vector3(0f, 0f, 20.456f);
+                return true;
+            }
+            if (sceneName == "island 15 M (Fort)")
+            {
+                localPosition = new Vector3(-0.993f, -1.933f, 0f);
+                localEulerAngles = new Vector3(0f, 0f, -15.067f);
+                return true;
+            }
+            if (!(sceneName == "island 27 Lagoon SwampShipyard"))
+            {
+                localPosition = Vector3.zero;
+                localEulerAngles = Vector3.zero;
+                return false;
+            }
+            localPosition = new Vector3(-0.699f, -0.891f, 0f);
+            localEulerAngles = new Vector3(0f, 0f, -157.151f);
+            return true;
+        }
+
+        private static float GetProjectedHalfExtent(Collider collider, Vector3 direction)
         {
             if (collider == null)
             {
                 return 0.6f;
             }
-            Vector3 extent = collider.bounds.extents;
-            Vector3 axis = direction.normalized;
-            return Mathf.Abs(axis.x) * extent.x +
-                   Mathf.Abs(axis.y) * extent.y +
-                   Mathf.Abs(axis.z) * extent.z;
+            Vector3 extents = collider.bounds.extents;
+            Vector3 normalized = direction.normalized;
+            return Mathf.Abs(normalized.x) * extents.x + Mathf.Abs(normalized.y) * extents.y + Mathf.Abs(normalized.z) * extents.z;
         }
 
-        private static Vector3 GetSurfaceLateral(
-            Collider collider,
-            Transform source)
+        private static Vector3 GetSurfaceLateral(Collider collider, Transform source)
         {
-            Vector3 normal = source.forward;
-            BoxCollider box = collider as BoxCollider;
-            if (box != null)
+            Vector3 rhs = source.forward;
+            BoxCollider boxCollider = collider as BoxCollider;
+            if (boxCollider != null)
             {
-                Vector3 size = box.size;
+                Vector3 size = boxCollider.size;
                 if (size.x <= size.y && size.x <= size.z)
                 {
-                    normal = source.right;
+                    rhs = source.right;
                 }
                 else if (size.y <= size.x && size.y <= size.z)
                 {
-                    normal = source.up;
+                    rhs = source.up;
                 }
             }
-
-            Vector3 lateral = Vector3.Cross(Vector3.up, normal);
-            if (lateral.sqrMagnitude < 0.01f)
+            Vector3 vector = Vector3.Cross(Vector3.up, rhs);
+            if (vector.sqrMagnitude < 0.01f)
             {
-                lateral = Vector3.ProjectOnPlane(source.right, Vector3.up);
+                vector = Vector3.ProjectOnPlane(source.right, Vector3.up);
             }
-            if (lateral.sqrMagnitude < 0.01f)
+            if (vector.sqrMagnitude < 0.01f)
             {
-                lateral = source.right;
+                vector = source.right;
             }
-            lateral.Normalize();
-            if (Vector3.Dot(lateral, source.right) < 0f)
+            vector.Normalize();
+            if (Vector3.Dot(vector, source.right) < 0f)
             {
-                lateral = -lateral;
+                vector = -vector;
             }
-            return lateral;
+            return vector;
         }
     }
 
-    internal sealed class SailmakerEntryInstalled : MonoBehaviour
+    internal sealed class SailmakerDeliveryInstalled : MonoBehaviour
     {
     }
 
-    internal sealed class SailmakerEntryStateMirror : MonoBehaviour
+    [HarmonyPatch(typeof(ShipyardUI), "Awake")]
+    internal static class SailmakerModeButtonInstallPatch
     {
-        private GameObject sourceKeeper;
-        private GameObject sailmakerKeeper;
-
-        internal void Initialize(GameObject source, GameObject copy)
+        [HarmonyPostfix]
+        private static void Postfix(ShipyardUI __instance)
         {
-            sourceKeeper = source;
-            sailmakerKeeper = copy;
-            Synchronize();
-        }
-
-        private void LateUpdate()
-        {
-            Synchronize();
-        }
-
-        private void Synchronize()
-        {
-            if (sourceKeeper == null || sailmakerKeeper == null)
+            try
             {
-                return;
+                ShipyardButton shipyardButton = __instance.GetComponentsInChildren<ShipyardButton>(true).FirstOrDefault((ShipyardButton button) => button.function == ShipyardButton.ButtonFunction.cleanHull);
+                if (shipyardButton == null)
+                {
+                    ManualLogSource log = SwappableStaysailPlugin.Log;
+                    if (log != null)
+                    {
+                        log.LogError("Could not find the shipyard's Clean Ship button; the Sail Maker button was not added.");
+                    }
+                }
+                else
+                {
+                    Transform transform = shipyardButton.transform;
+                    GameObject gameObject = UnityEngine.Object.Instantiate<GameObject>(shipyardButton.gameObject, transform.parent);
+                    gameObject.name = "shipyard ui button sail maker";
+                    ShipyardButton[] componentsInChildren = gameObject.GetComponentsInChildren<ShipyardButton>(true);
+                    for (int i = 0; i < componentsInChildren.Length; i++)
+                    {
+                        UnityEngine.Object.DestroyImmediate(componentsInChildren[i]);
+                    }
+                    Outline[] componentsInChildren2 = gameObject.GetComponentsInChildren<Outline>(true);
+                    for (int i = 0; i < componentsInChildren2.Length; i++)
+                    {
+                        UnityEngine.Object.DestroyImmediate(componentsInChildren2[i]);
+                    }
+                    gameObject.transform.localRotation = transform.localRotation;
+                    gameObject.transform.localScale = transform.localScale;
+                    gameObject.transform.localPosition = transform.localPosition + Vector3.up * (transform.localScale.y + 0.3f);
+                    TextMesh text = (gameObject.transform.childCount > 0) ? gameObject.transform.GetChild(0).GetComponent<TextMesh>() : null;
+                    gameObject.AddComponent<SailmakerModeButton>().Initialize(text);
+                }
             }
-            bool visible = sourceKeeper.activeSelf;
-            if (sailmakerKeeper.activeSelf != visible)
+            catch (Exception arg)
             {
-                sailmakerKeeper.SetActive(visible);
+                ManualLogSource log2 = SwappableStaysailPlugin.Log;
+                if (log2 != null)
+                {
+                    log2.LogError(string.Format("Could not add the Sail Maker button: {0}", arg));
+                }
             }
         }
+
+        private const float GapAboveCleanShip = 0.3f;
     }
 
     [HarmonyPatch(typeof(ShipyardDocuments), nameof(ShipyardDocuments.OnActivate))]
@@ -331,10 +291,131 @@ namespace SwappableStaysail
     internal static class ShipyardDischargePatch
     {
         [HarmonyPrefix]
-        private static void Prefix()
+        private static void Prefix(Shipyard __instance)
         {
+            SailmakerCollisionChecks.Cancel(__instance.sailInstaller);
             SailmakerSession.End();
         }
+
+        [HarmonyPostfix]
+        private static void Postfix(Shipyard __instance)
+        {
+            SailmakerCollisionChecks.Cancel(__instance.sailInstaller);
+        }
+    }
+
+    [HarmonyPatch(typeof(ShipyardSailInstaller), nameof(ShipyardSailInstaller.RecheckAllSailsCols))]
+    internal static class ShipyardCollisionRecheckPatch
+    {
+        [HarmonyPrefix]
+        private static bool Prefix(ShipyardSailInstaller __instance, Shipyard ___shipyard)
+        {
+            // Keep the native delays and sweep, but own one cancellable request.
+            // Vanilla queues overlapping iterators over the live mast.sails lists.
+            SailmakerCollisionChecks.Request(__instance, ___shipyard);
+            return false;
+        }
+    }
+
+    internal sealed class SailmakerCollisionChecks : MonoBehaviour
+    {
+        private Shipyard shipyard;
+        private GameObject boat;
+        private Coroutine worker;
+        private int revision;
+        private bool ready;
+
+        internal static void Request(ShipyardSailInstaller installer, Shipyard yard)
+        {
+            if (installer == null) return;
+            SailmakerCollisionChecks state = installer.GetComponent<SailmakerCollisionChecks>();
+            if (yard == null || GameState.currentShipyard != yard || yard.GetCurrentBoat() == null)
+            {
+                if (state != null) state.Stop();
+                return;
+            }
+            if (state == null) state = installer.gameObject.AddComponent<SailmakerCollisionChecks>();
+            state.Stop();
+            state.shipyard = yard;
+            state.boat = yard.GetCurrentBoat();
+            // Invalidate synchronously, before the first coroutine yield.
+            state.worker = state.StartCoroutine(state.Check(state.revision));
+        }
+
+        internal static bool IsReady(Shipyard yard)
+        {
+            SailmakerCollisionChecks state = yard != null && yard.sailInstaller != null
+                ? yard.sailInstaller.GetComponent<SailmakerCollisionChecks>() : null;
+            return state != null && state.ready && state.IsCurrent(state.revision);
+        }
+
+        internal static void Cancel(ShipyardSailInstaller installer)
+        {
+            SailmakerCollisionChecks state = installer != null
+                ? installer.GetComponent<SailmakerCollisionChecks>() : null;
+            if (state != null) state.Stop();
+        }
+
+        private void Stop()
+        {
+            revision++;
+            ready = false;
+            if (worker != null) StopCoroutine(worker);
+            worker = null;
+            shipyard = null;
+            boat = null;
+        }
+
+        private bool IsCurrent(int request)
+        {
+            return request == revision && shipyard != null && boat != null &&
+                   GameState.currentShipyard == shipyard && shipyard.GetCurrentBoat() == boat;
+        }
+
+        private IEnumerator Check(int request)
+        {
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForFixedUpdate();
+            yield return new WaitForFixedUpdate();
+            yield return new WaitForFixedUpdate();
+            if (!IsCurrent(request)) yield break;
+            BoatRefs refs = boat.GetComponent<BoatRefs>();
+            if (refs == null || refs.masts == null) yield break;
+
+            // Snapshot active sails so adding/removing previews between physics
+            // steps cannot invalidate a List enumerator or check a destroyed sail.
+            Sail[] sails = refs.masts.Where(m => m != null && m.gameObject.activeInHierarchy && m.sails != null)
+                .SelectMany(m => m.sails.ToArray())
+                .Where(s => s != null && s.activeInHierarchy)
+                .Select(s => s.GetComponent<Sail>()).Where(s => s != null).ToArray();
+            List<ShipyardSailColChecker> checkers = new List<ShipyardSailColChecker>();
+            foreach (Sail sail in sails)
+            {
+                if (!IsCurrent(request) || sail == null) yield break;
+                SailConnections connections = sail.GetComponent<SailConnections>();
+                ShipyardSailColChecker checker = connections != null ? connections.colChecker : null;
+                if (checker == null) yield break;
+                checkers.Add(checker);
+                checker.RunColCheck();
+                yield return new WaitForFixedUpdate();
+                yield return new WaitForEndOfFrame();
+            }
+            while (IsCurrent(request) && checkers.Any(c => c != null && c.checking))
+                yield return new WaitForFixedUpdate();
+            // Returning the final checker to angle zero can produce a trigger
+            // event in the next simulation. Let that event settle before Buy.
+            yield return new WaitForFixedUpdate();
+            yield return new WaitForEndOfFrame();
+            if (!IsCurrent(request) || checkers.Any(c => c == null || c.checking || !c.readyToInstall))
+                yield break;
+            ready = true;
+            worker = null;
+            shipyard.UpdateOrder();
+            if (ShipyardUI.instance != null) ShipyardUI.instance.RefreshButtons();
+        }
+
+        private void OnDisable() { Stop(); }
     }
 
     [HarmonyPatch(typeof(Shipyard), nameof(Shipyard.CancelOrder))]
@@ -744,6 +825,61 @@ namespace SwappableStaysail
         }
     }
 
+    [HarmonyPatch(typeof(WindCloth), "Update")]
+    internal static class SailmakerHiddenClothPatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(Sail ___sail, Renderer ___renderer)
+        {
+            if (___renderer != null && SailmakerSession.IsHiddenSail(___sail))
+            {
+                ___renderer.enabled = false;
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(ShipyardSailColChecker), "OnTriggerEnter")]
+    internal static class SailmakerPreviewCollisionPatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(ShipyardSailColChecker __instance, Collider other, Sail ___sail)
+        {
+            if (!SailmakerSession.Active || other == null || __instance.currentAngle != 0 || __instance.transform.position.y >= 900f || !SailmakerSession.IsPreview(___sail))
+            {
+                return;
+            }
+            GameObject gameObject = other.gameObject;
+            if (gameObject.CompareTag("SailColCheckerSub") && gameObject.transform.parent != null)
+            {
+                gameObject = gameObject.transform.parent.gameObject;
+            }
+            if (gameObject == __instance.gameObject || !gameObject.CompareTag("SailColChecker"))
+            {
+                return;
+            }
+            ShipyardSailColChecker component = gameObject.GetComponent<ShipyardSailColChecker>();
+            Sail sail;
+            if (!(component != null))
+            {
+                sail = null;
+            }
+            else
+            {
+                FieldInfo sailField = SailmakerPreviewCollisionPatch.SailField;
+                sail = (((sailField != null) ? sailField.GetValue(component) : null) as Sail);
+            }
+            Sail sail2 = sail;
+            if (component == null || component.currentAngle != 0 || sail2 == null || sail2.category == SailCategory.staysail)
+            {
+                return;
+            }
+            __instance.collisionsWithSails++;
+            SailmakerSession.RefreshOrder(GameState.currentShipyard);
+        }
+
+        private static readonly FieldInfo SailField = AccessTools.Field(typeof(ShipyardSailColChecker), "sail");
+    }
+
     internal static class SailmakerSession
     {
         private static readonly FieldInfo CurrentOrderTotalField =
@@ -762,6 +898,9 @@ namespace SwappableStaysail
             new List<SailmakerPreview>();
         private static readonly Dictionary<Mast, SailmakerMastRigState> RigStates =
             new Dictionary<Mast, SailmakerMastRigState>();
+
+        private static readonly HashSet<Sail> HiddenSails = new HashSet<Sail>();
+        private static readonly Dictionary<Renderer, bool> HiddenClothRenderers = new Dictionary<Renderer, bool>();
 
         internal static bool Pending { get; private set; }
         internal static Shipyard ActiveShipyard { get; private set; }
@@ -793,6 +932,7 @@ namespace SwappableStaysail
             Pending = false;
             ActiveShipyard = shipyard;
             ClearPreviews(false);
+            HideInstalledSails(shipyard);
             SwappableStaysailPlugin.Log?.LogInfo(
                 $"Opened Sail Maker at shipyard region {shipyard.region}.");
             RefreshOrder(shipyard);
@@ -823,9 +963,175 @@ namespace SwappableStaysail
             }
             finally
             {
+                ShowInstalledSails();
                 ActiveShipyard = null;
                 SailmakerUiPatch.RestoreUi();
             }
+        }
+
+        internal static bool IsHiddenSail(Sail sail)
+        {
+            return SailmakerSession.HiddenSails.Count > 0 && sail != null && SailmakerSession.HiddenSails.Contains(sail);
+        }
+
+        private static void HideInstalledSails(Shipyard shipyard)
+        {
+            SailmakerSession.ShowInstalledSails();
+            GameObject currentBoat = shipyard.GetCurrentBoat();
+            BoatRefs boatRefs = (currentBoat != null) ? currentBoat.GetComponent<BoatRefs>() : null;
+            if (((boatRefs != null) ? boatRefs.masts : null) == null)
+            {
+                return;
+            }
+            foreach (Mast mast in boatRefs.masts)
+            {
+                if (!(mast == null) && mast.sails != null)
+                {
+                    foreach (GameObject gameObject in mast.sails)
+                    {
+                        Sail sail = (gameObject != null) ? gameObject.GetComponent<Sail>() : null;
+                        if (!(sail == null) && sail.category == SailCategory.staysail && !SailmakerSession.IsPreview(sail))
+                        {
+                            SailmakerSession.HiddenSails.Add(sail);
+                            WindCloth[] componentsInChildren = gameObject.GetComponentsInChildren<WindCloth>(true);
+                            for (int j = 0; j < componentsInChildren.Length; j++)
+                            {
+                                Renderer component = componentsInChildren[j].GetComponent<Renderer>();
+                                if (component != null && !SailmakerSession.HiddenClothRenderers.ContainsKey(component))
+                                {
+                                    SailmakerSession.HiddenClothRenderers[component] = component.enabled;
+                                    component.enabled = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void ShowInstalledSails()
+        {
+            foreach (KeyValuePair<Renderer, bool> keyValuePair in SailmakerSession.HiddenClothRenderers)
+            {
+                if (keyValuePair.Key != null)
+                {
+                    keyValuePair.Key.enabled = keyValuePair.Value;
+                }
+            }
+            SailmakerSession.HiddenClothRenderers.Clear();
+            SailmakerSession.HiddenSails.Clear();
+        }
+
+        internal static void ToggleFromShipyardMenu()
+        {
+            Shipyard currentShipyard = GameState.currentShipyard;
+            if (currentShipyard == null || currentShipyard.GetCurrentBoat() == null)
+            {
+                return;
+            }
+            if (SailmakerSession.Active)
+            {
+                if (SailmakerSession.GetPreviews().Count > 0)
+                {
+                    SailmakerSession.Notify("Buy or cancel the\nstaysails first.");
+                    return;
+                }
+                SailmakerSession.End();
+                SailmakerSession.ShowSailPage(currentShipyard);
+                currentShipyard.UpdateOrder();
+                ManualLogSource log = SwappableStaysailPlugin.Log;
+                if (log == null)
+                {
+                    return;
+                }
+                log.LogInfo("Switched from Sail Maker back to the shipyard.");
+                return;
+            }
+            else
+            {
+                if (SailmakerSession.HasUnconfirmedShipyardOrder(currentShipyard))
+                {
+                    SailmakerSession.Notify("Confirm or cancel the\ncurrent order first.");
+                    return;
+                }
+                if (!SailmakerSession.HasSupportedStay(currentShipyard.GetCurrentBoat()))
+                {
+                    SailmakerSession.Notify("This ship has no\nsupported staysail stay.");
+                    return;
+                }
+                currentShipyard.sailInstaller.SelectMast(null);
+                SailmakerSession.Request(currentShipyard);
+                SailmakerSession.TryBegin(currentShipyard);
+                return;
+            }
+        }
+
+        private static void ShowSailPage(Shipyard shipyard)
+        {
+            shipyard.sailInstaller.SelectMast(null);
+            ShipyardUI instance = ShipyardUI.instance;
+            if (instance != null)
+            {
+                instance.ChangeMenuCategory(-1);
+                instance.CloseSailCategoryMenu();
+                instance.HideNewSailButtons();
+            }
+        }
+
+        private static bool HasUnconfirmedShipyardOrder(Shipyard shipyard)
+        {
+            if (shipyard.IncludeHullCleaning() || shipyard.IncludeRepair())
+            {
+                return true;
+            }
+            List<ShipyardRefund> currentRefunds = shipyard.GetCurrentRefunds();
+            if (currentRefunds != null && currentRefunds.Count > 0)
+            {
+                return true;
+            }
+            GameObject currentBoat = shipyard.GetCurrentBoat();
+            BoatRefs component = currentBoat.GetComponent<BoatRefs>();
+            if (((component != null) ? component.masts : null) != null)
+            {
+                foreach (Mast mast in component.masts)
+                {
+                    if (!(mast == null) && mast.sails != null)
+                    {
+                        foreach (GameObject gameObject in mast.sails)
+                        {
+                            Sail sail = (gameObject != null) ? gameObject.GetComponent<Sail>() : null;
+                            if (sail != null && !sail.IsInstalled())
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            BoatCustomParts component2 = currentBoat.GetComponent<BoatCustomParts>();
+            BoatPartsOrder boatPartsOrder = (shipyard.partsInstaller != null) ? shipyard.partsInstaller.GetCurrentOrder() : null;
+            if (((component2 != null) ? component2.availableParts : null) != null && ((boatPartsOrder != null) ? boatPartsOrder.orderedOptions : null) != null)
+            {
+                int num = Math.Min(component2.availableParts.Count, boatPartsOrder.orderedOptions.Length);
+                for (int j = 0; j < num; j++)
+                {
+                    if (component2.availableParts[j].activeOption != boatPartsOrder.orderedOptions[j])
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static bool HasSupportedStay(GameObject boat)
+        {
+            BoatRefs component = boat.GetComponent<BoatRefs>();
+            if (((component != null) ? component.masts : null) != null)
+            {
+                return component.masts.Any((Mast mast) => mast != null && mast.gameObject.activeInHierarchy && StaysailTargets.IsEligible(mast));
+            }
+            return false;
         }
 
         internal static bool IsAllowedMast(Mast mast)
@@ -870,6 +1176,16 @@ namespace SwappableStaysail
                 Notify("Select a supported staysail stay.");
                 return false;
             }
+            GameObject[] selectionButtons = ShipyardUI.instance != null
+                ? SelectSailButtonsField?.GetValue(ShipyardUI.instance) as GameObject[] : null;
+            int capacity = selectionButtons?.Length ?? 0;
+            if (GetPreviews(mast).Count >= capacity)
+            {
+                Notify(capacity > 0
+                    ? $"Order at most {capacity} staysails per stay.\nBuy or remove one first."
+                    : "The staysail selection menu is unavailable.");
+                return false;
+            }
 
             GameObject sailObject = null;
             try
@@ -889,6 +1205,7 @@ namespace SwappableStaysail
                 // same ownership and attachment updates as a normal order.
                 ActiveShipyard.sailInstaller.AddNewSail(sailObject);
                 Previews.Add(new SailmakerPreview(mast, sail));
+                ActiveShipyard.sailInstaller.RecheckAllSailsCols();
                 RefreshPreviewUi();
                 SwappableStaysailPlugin.Log?.LogInfo(
                     $"Added registered Sail Maker preview '{sail.sailName}' for " +
@@ -1220,10 +1537,7 @@ namespace SwappableStaysail
             }
         }
 
-        private static string ValidatePreview(
-            Mast mast,
-            Sail sail,
-            ref bool error)
+        private static string ValidatePreview(Mast mast, Sail sail, ref bool error)
         {
             if (!StaysailTargets.IsEligible(mast))
             {
@@ -1240,6 +1554,19 @@ namespace SwappableStaysail
             {
                 error = true;
                 return " (DOES NOT FIT STAY)";
+            }
+            SailConnections connections = sail.GetComponent<SailConnections>();
+            ShipyardSailColChecker checker = connections != null ? connections.colChecker : null;
+            if (checker == null || !checker.readyToInstall || checker.checking ||
+                !SailmakerCollisionChecks.IsReady(ActiveShipyard))
+            {
+                error = true;
+                return " (checking collision...)";
+            }
+            if (checker.IsCollidingWithSail())
+            {
+                error = true;
+                return " (SAILS COLLISION)";
             }
             return "";
         }
@@ -1268,7 +1595,7 @@ namespace SwappableStaysail
                 {
                     shipyard.sailInstaller.SelectSail(null);
                 }
-                shipyard.sailInstaller.RecheckAllSailsCols();
+                if (refresh) shipyard.sailInstaller.RecheckAllSailsCols();
             }
             if (refresh && Active)
             {
@@ -1463,45 +1790,68 @@ namespace SwappableStaysail
         }
     }
 
-    internal sealed class SailmakerOrderButton : GoPointerButton
+    internal sealed class SailmakerModeButton : GoPointerButton
     {
-        private Shipyard shipyard;
-
-        internal void Initialize(Shipyard target)
+        internal void Initialize(TextMesh text)
         {
-            shipyard = target;
-            lookText = "Sail Maker";
+            this.label = text;
+            this.buttonRenderer = base.GetComponent<Renderer>();
+            this.hasShownState = false;
+            this.RefreshAppearance();
         }
 
         public override void ExtraLateUpdate()
         {
-            if (shipyard == null)
-            {
-                lookText = "";
-            }
-            else if (shipyard.GetBoatsInTriggerCount() < 1)
-            {
-                lookText = "(no boat in the Sail Maker area)";
-            }
-            else if (shipyard.GetBoatsInTriggerCount() > 1)
-            {
-                lookText = "(too many boats in the Sail Maker area)";
-            }
-            else
-            {
-                lookText = "Sail Maker";
-            }
+            this.RefreshAppearance();
         }
 
         public override void OnActivate()
         {
-            if (shipyard == null || GameState.currentShipyard != null ||
-                shipyard.GetBoatsInTriggerCount() != 1)
+            UISoundPlayer instance = UISoundPlayer.instance;
+            if (instance != null)
+            {
+                instance.PlayUISound(UISounds.buttonHover, 0.33f, 3f);
+            }
+            ShipyardUI instance2 = ShipyardUI.instance;
+            if (instance2 != null)
+            {
+                instance2.HideNewSailButtons();
+                instance2.CloseSailCategoryMenu();
+            }
+            SailmakerSession.ToggleFromShipyardMenu();
+            this.RefreshAppearance();
+            if (instance2 != null)
+            {
+                instance2.RefreshButtons();
+            }
+        }
+
+        private void RefreshAppearance()
+        {
+            bool active = SailmakerSession.Active;
+            if (this.hasShownState && active == this.shownActive)
             {
                 return;
             }
-            SailmakerSession.Request(shipyard);
-            shipyard.ActivateDocuments();
+            ShipyardUI instance = ShipyardUI.instance;
+            if (this.label != null)
+            {
+                this.label.text = (active ? "X Sail Maker" : "Sail Maker");
+            }
+            if (this.buttonRenderer != null && instance != null)
+            {
+                this.buttonRenderer.sharedMaterial = (active ? instance.darkParchmentMaterial : instance.parchmentMaterial);
+            }
+            this.hasShownState = (instance != null);
+            this.shownActive = active;
         }
+
+        private TextMesh label;
+
+        private Renderer buttonRenderer;
+
+        private bool hasShownState;
+
+        private bool shownActive;
     }
 }

@@ -19,7 +19,7 @@ namespace SwappableStaysail
         // Preserve the identity of the installed 1.1.4 release.
         public const string PluginGuid = "DogEggz";
         public const string PluginName = "Swappable Staysail";
-        public const string PluginVersion = "1.1.5";
+        public const string PluginVersion = "1.2.2";
         public const string ShipyardExpansionGuid = "com.nandbrew.shipyardexpansion";
         internal const string SaveDataKey = "DogEggz";
 
