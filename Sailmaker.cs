@@ -582,6 +582,7 @@ namespace SwappableStaysail
                 case ShipyardButton.ButtonFunction.changeCategory:
                 case ShipyardButton.ButtonFunction.previousPart:
                 case ShipyardButton.ButtonFunction.nextPart:
+                case SailDamageBridge.PatchSailsFunction:
                     return false;
                 case ShipyardButton.ButtonFunction.selectSailCategory:
                     return __instance.index == (int)SailCategory.staysail;
@@ -664,6 +665,7 @@ namespace SwappableStaysail
                                button.function == ShipyardButton.ButtonFunction.changeCategory ||
                                button.function == ShipyardButton.ButtonFunction.previousPart ||
                                button.function == ShipyardButton.ButtonFunction.nextPart ||
+                               button.function == SailDamageBridge.PatchSailsFunction ||
                                (button.function == ShipyardButton.ButtonFunction.selectSailCategory &&
                                 button.index != (int)SailCategory.staysail);
                 Collider collider = button.GetComponent<Collider>();
@@ -1080,7 +1082,8 @@ namespace SwappableStaysail
 
         private static bool HasUnconfirmedShipyardOrder(Shipyard shipyard)
         {
-            if (shipyard.IncludeHullCleaning() || shipyard.IncludeRepair())
+            if (shipyard.IncludeHullCleaning() || shipyard.IncludeRepair() ||
+                SailDamageBridge.PatchSailsOrdered())
             {
                 return true;
             }
