@@ -25,7 +25,7 @@ namespace SwappableStaysail
         // Preserve the identity of the installed 1.1.4 release.
         public const string PluginGuid = "DogEggz";
         public const string PluginName = "Swappable Staysail";
-        public const string PluginVersion = "1.2.3";
+        public const string PluginVersion = "1.2.4";
         public const string ShipyardExpansionGuid = "com.nandbrew.shipyardexpansion";
         internal const string SaveDataKey = "DogEggz";
 
@@ -101,11 +101,13 @@ namespace SwappableStaysail
 
         internal static void Initialize(Harmony harmony)
         {
+#pragma warning disable SW016 // Initialize runs once, from the plugin's Awake.
             if (!Chainloader.PluginInfos.TryGetValue(SailDamageGuid, out PluginInfo plugin) ||
                 plugin?.Instance == null)
             {
                 return;
             }
+#pragma warning restore SW016
 
             Assembly assembly = plugin.Instance.GetType().Assembly;
             Type damageModelType = assembly.GetType("SailDamage.DamageModel");

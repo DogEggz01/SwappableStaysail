@@ -185,6 +185,7 @@ namespace SwappableStaysail
         internal const int SmallPrefabIndex = 601;
         internal const float SmallPackageMaximumMass = 25f;
 
+        private static GameObject templateHolder;
         private static GameObject legacyPrefab;
         private static GameObject standardPrefab;
         private static GameObject smallPrefab;
@@ -379,9 +380,11 @@ namespace SwappableStaysail
                 UnregisterPrefab(directory, StandardPrefabIndex, standardPrefab);
                 UnregisterPrefab(directory, SmallPrefabIndex, smallPrefab);
             }
-            DestroyPrefab(legacyPrefab);
-            DestroyPrefab(standardPrefab);
-            DestroyPrefab(smallPrefab);
+            if (templateHolder != null)
+            {
+                UnityEngine.Object.Destroy(templateHolder);
+            }
+            templateHolder = null;
             legacyPrefab = null;
             standardPrefab = null;
             smallPrefab = null;
@@ -455,17 +458,20 @@ namespace SwappableStaysail
             }
         }
 
-        private static void DestroyPrefab(GameObject registeredPrefab)
-        {
-            if (registeredPrefab != null)
-            {
-                UnityEngine.Object.Destroy(registeredPrefab);
-            }
-        }
-
         private static GameObject BuildPrefab(GameObject donor, int prefabIndex)
         {
-            GameObject clone = UnityEngine.Object.Instantiate(donor);
+            // Under an inactive holder the template never runs ShipItem.Awake, so it gets
+            // no physics copy or LOD group. Its own inactive state passes to every copy.
+            if (templateHolder == null)
+            {
+                templateHolder = new GameObject("sail package templates");
+                templateHolder.SetActive(false);
+                UnityEngine.Object.DontDestroyOnLoad(templateHolder);
+            }
+            GameObject clone = UnityEngine.Object.Instantiate(
+                donor,
+                templateHolder.transform,
+                false);
             clone.SetActive(false);
             clone.name = "sail package";
             clone.transform.localScale = Vector3.one;
@@ -485,6 +491,7 @@ namespace SwappableStaysail
             item.name = "sail package";
             item.lookText = "sail package";
             item.mass = SailpackWeight.MinimumPackageMass;
+            item.buoyancy = item.mass * SailpackWeight.BuoyancyPerMass;
             // Preserve vanilla package/cargo behavior. Automatic uninstall
             // handoff stabilizes only the first moments of big-item pickup.
             item.big = true;
@@ -492,7 +499,9 @@ namespace SwappableStaysail
             item.holdHeight = 0f;
             item.heldRotationOffset = 180f;
             item.wallAttachment = false;
+#pragma warning disable SW052 // The template is never saved; each copy is registered when made or loaded.
             item.sold = true;
+#pragma warning restore SW052
             item.value = 0;
             clone.tag = "Untagged";
 
@@ -502,22 +511,7 @@ namespace SwappableStaysail
                 UnityEngine.Object.DestroyImmediate(good);
             }
 
-            if (item.itemRigidbodyC != null)
-            {
-                // ShipItem.Awake creates a proxy before this runtime directory
-                // template can be disabled. Real instances create their own proxy.
-                UnityEngine.Object.DestroyImmediate(item.itemRigidbodyC.gameObject);
-                item.itemRigidbodyC = null;
-                item.colChecker = null;
-            }
-
-            foreach (LODGroup lod in clone.GetComponents<LODGroup>())
-            {
-                UnityEngine.Object.DestroyImmediate(lod);
-            }
-
             clone.AddComponent<SailpackData>();
-            UnityEngine.Object.DontDestroyOnLoad(clone);
             return clone;
         }
     }
@@ -619,6 +613,7 @@ namespace SwappableStaysail
                 item.name = displayName;
                 item.lookText = displayName;
                 item.mass = record.packageMass;
+                item.buoyancy = item.mass * SailpackWeight.BuoyancyPerMass;
                 if (item.itemRigidbodyC != null &&
                     item.itemRigidbodyC.GetBody() != null)
                 {
@@ -1171,6 +1166,8 @@ namespace SwappableStaysail
     internal static class SailpackWeight
     {
         internal const float MinimumPackageMass = 0.1f;
+        // The game floats an item while buoyancy / mass is 1 or more; 1.25 is its default for an item of mass 1.
+        internal const float BuoyancyPerMass = 1.25f;
 
         internal static float FromSail(Sail sail)
         {
@@ -1379,9 +1376,18 @@ namespace SwappableStaysail
             item.transform.rotation = GetHeldRotation(
                 pointer,
                 item.heldRotationOffset);
+            ResetBody(item);
+        }
+
+        // ResetRigidbody puts the physics copy at the item's world pose. Aboard, the
+        // copy lives on the boat's walk collider, so the pose is mapped there too, or
+        // the next physics step throws the item far off.
+        private static void ResetBody(ShipItem item)
+        {
             if (item.itemRigidbodyC != null)
             {
                 item.ResetRigidbody();
+                item.itemRigidbodyC.ForceRigidbodyToWalkCol();
             }
         }
 
@@ -1425,10 +1431,7 @@ namespace SwappableStaysail
                     item.heldRotationOffset);
             }
             SetLayer(item.transform, 0);
-            if (item.itemRigidbodyC != null)
-            {
-                item.ResetRigidbody();
-            }
+            ResetBody(item);
 
             NotificationUi.instance?.ShowNotification(
                 "Staysail removed; the sail package was placed in front of you.");
@@ -2659,12 +2662,14 @@ namespace SwappableStaysail
             }
 
             SaveableObject saveable = null;
+#pragma warning disable SW014 // Callers pass active masts only: Matches tests activeInHierarchy first; records come from the ship at hand.
             if (mast.shipRigidbody != null)
             {
                 saveable = mast.shipRigidbody.GetComponent<SaveableObject>() ??
                            mast.shipRigidbody.GetComponentInParent<SaveableObject>();
             }
             saveable = saveable ?? mast.GetComponentInParent<SaveableObject>();
+#pragma warning restore SW014
             return saveable != null ? saveable.sceneIndex : -1;
         }
 
@@ -2696,6 +2701,7 @@ namespace SwappableStaysail
                 return data.RuntimeTarget;
             }
 
+            // Every ship registers in the save list by its scene index (SaveableObject.Awake).
             Mast[] candidates = Array.Empty<Mast>();
             SaveLoadManager manager = SaveLoadManager.instance;
             if (manager != null)
@@ -2710,13 +2716,6 @@ namespace SwappableStaysail
                         .Where(mast => Matches(mast, record))
                         .ToArray();
                 }
-            }
-
-            if (candidates.Length == 0)
-            {
-                candidates = UnityEngine.Object.FindObjectsOfType<Mast>()
-                    .Where(mast => Matches(mast, record))
-                    .ToArray();
             }
 
             Mast resolved = candidates.FirstOrDefault(mast =>
@@ -2833,6 +2832,12 @@ namespace SwappableStaysail
         [HarmonyPostfix]
         private static void Postfix(JibAngleMaster __instance)
         {
+            // A prefix of another mod can skip the reset of a jib a load destroyed;
+            // HarmonyX still runs this postfix.
+            if (__instance == null)
+            {
+                return;
+            }
             StaysailWindShadow.RecoverAfterHingeReset(__instance.GetComponent<Sail>());
         }
     }

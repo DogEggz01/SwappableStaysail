@@ -217,7 +217,9 @@ namespace SwappableStaysail
         {
             try
             {
+#pragma warning disable SW014 // The game has one Clean Ship button, in a menu switched off until a shipyard opens.
                 ShipyardButton shipyardButton = __instance.GetComponentsInChildren<ShipyardButton>(true).FirstOrDefault((ShipyardButton button) => button.function == ShipyardButton.ButtonFunction.cleanHull);
+#pragma warning restore SW014
                 if (shipyardButton == null)
                 {
                     ManualLogSource log = SwappableStaysailPlugin.Log;
@@ -290,17 +292,25 @@ namespace SwappableStaysail
     [HarmonyPatch(typeof(Shipyard), nameof(Shipyard.DischargeShip))]
     internal static class ShipyardDischargePatch
     {
+        // The game ignores Exit while its admit slide runs (movingShip), so Sail Maker stays open then too.
         [HarmonyPrefix]
-        private static void Prefix(Shipyard __instance)
+        private static void Prefix(Shipyard __instance, bool ___movingShip)
         {
+            if (___movingShip)
+            {
+                return;
+            }
             SailmakerCollisionChecks.Cancel(__instance.sailInstaller);
             SailmakerSession.End();
         }
 
         [HarmonyPostfix]
-        private static void Postfix(Shipyard __instance)
+        private static void Postfix(Shipyard __instance, bool ___movingShip)
         {
-            SailmakerCollisionChecks.Cancel(__instance.sailInstaller);
+            if (!___movingShip)
+            {
+                SailmakerCollisionChecks.Cancel(__instance.sailInstaller);
+            }
         }
     }
 
@@ -1080,10 +1090,22 @@ namespace SwappableStaysail
             }
         }
 
+        private static readonly AccessTools.FieldRef<Shipyard, SaveBoatCustomizationData> OriginalData =
+            AccessTools.FieldRefAccess<Shipyard, SaveBoatCustomizationData>("originalData");
+
+        // A paint colour picked in the shipyard and not yet paid: the boat's colours differ from those it was admitted with.
+        private static bool HasUnpaidPaint(Shipyard shipyard)
+        {
+            int[] before = OriginalData(shipyard)?.customColors;
+            SaveableBoatCustomization custom = shipyard.GetCurrentBoat()?.GetComponent<SaveableBoatCustomization>();
+            int[] now = custom != null ? custom.GetData()?.customColors : null;
+            return before != null && now != null && !now.SequenceEqual(before);
+        }
+
         private static bool HasUnconfirmedShipyardOrder(Shipyard shipyard)
         {
             if (shipyard.IncludeHullCleaning() || shipyard.IncludeRepair() ||
-                SailDamageBridge.PatchSailsOrdered())
+                SailDamageBridge.PatchSailsOrdered() || HasUnpaidPaint(shipyard))
             {
                 return true;
             }
